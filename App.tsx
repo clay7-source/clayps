@@ -55,6 +55,7 @@ const App: React.FC = () => {
     setError(null);
     setGameData(null);
 
+    // Dismiss mobile keyboard
     if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
     }
@@ -72,8 +73,8 @@ const App: React.FC = () => {
       
       // Parse JSON error from Google if present
       if (err.message && (err.message.includes('{') || err.message.includes('429'))) {
-          if (err.message.includes('429') || err.message.includes('Quota')) {
-              msg = "Server is busy (Rate Limit Reached). Please wait a moment and try again.";
+          if (err.message.includes('429') || err.message.includes('Quota') || err.message.includes('Resource Exhausted')) {
+              msg = "Server is busy (High Traffic). Please wait 30 seconds and try again.";
           } else {
              msg = "Unable to fetch prices. Please check your connection or try a different game.";
           }
@@ -100,13 +101,13 @@ const App: React.FC = () => {
   }, gameData.prices[0])?.regionCode || 'US';
 
   return (
-    <div className="min-h-screen bg-brand-dark pb-10 font-sans text-gray-100 selection:bg-ps-light selection:text-white">
+    <div className="min-h-screen bg-brand-dark pb-safe font-sans text-gray-100 selection:bg-ps-light selection:text-white">
       {/* Sticky Header */}
-      <div className={`sticky top-0 z-50 transition-all duration-300 ${isScrolled ? 'bg-brand-dark/95 backdrop-blur-md shadow-lg border-b border-gray-800' : 'bg-transparent pt-4'}`}>
-        <div className="max-w-md mx-auto px-4 pb-2">
+      <div className={`sticky top-0 z-50 transition-all duration-300 ${isScrolled ? 'bg-brand-dark/95 backdrop-blur-md shadow-lg border-b border-gray-800' : 'bg-transparent pt-safe-top'}`}>
+        <div className="max-w-md mx-auto px-4 pb-2 pt-2">
           <div className="flex justify-between items-center mb-3">
              <h1 className="text-xl font-black tracking-tighter text-white">
-                <span className="text-ps-light">Clay's</span> PS price checker
+                <span className="text-ps-light">Clay's</span> PS Hunter
              </h1>
              <select 
                 value={targetCurrency}
@@ -120,17 +121,18 @@ const App: React.FC = () => {
           </div>
 
           <form onSubmit={handleSearch} className="relative group mb-3">
+            {/* Input text-base prevents iOS zoom on focus */}
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search game title..."
-              className="w-full bg-brand-card text-white placeholder-gray-500 rounded-2xl py-3 pl-4 pr-12 border border-gray-700 focus:border-ps-light focus:ring-1 focus:ring-ps-light focus:outline-none transition-all shadow-sm"
+              className="w-full bg-brand-card text-white text-base placeholder-gray-500 rounded-2xl py-3 pl-4 pr-12 border border-gray-700 focus:border-ps-light focus:ring-1 focus:ring-ps-light focus:outline-none transition-all shadow-sm appearance-none"
             />
             <button
               type="submit"
               disabled={loading || !searchTerm || selectedRegions.length === 0}
-              className="absolute right-2 top-1/2 -translate-y-1/2 bg-ps-light text-white p-2 rounded-xl hover:bg-ps-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-ps-light text-white p-2 rounded-xl hover:bg-ps-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-95"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
@@ -148,7 +150,7 @@ const App: React.FC = () => {
                         type="button"
                         onClick={() => toggleRegion(region.code)}
                         className={`
-                            flex items-center flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-all
+                            flex items-center flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-all active:scale-95
                             ${isSelected 
                                 ? 'bg-ps-dark border-ps-light text-white shadow-[0_0_10px_rgba(0,112,209,0.2)]' 
                                 : 'bg-brand-card border-gray-700 text-gray-400 hover:border-gray-500'
@@ -176,14 +178,14 @@ const App: React.FC = () => {
             <div className="text-center mt-8 space-y-4 opacity-60">
                 <div className="text-6xl mb-4 animate-bounce">🎮</div>
                 <p className="text-sm font-light px-6">
-                    Select regions above and enter a game title to check global PS Store prices instantly.
+                    Check PlayStation Store prices globally.
                 </p>
                 <div className="flex flex-wrap justify-center gap-2 mt-4">
                     {['Black Myth: Wukong', 'Elden Ring', 'FC 25', 'Spider-Man 2'].map(game => (
                         <button 
                             key={game}
                             onClick={() => { setSearchTerm(game); }}
-                            className="bg-brand-card border border-gray-700 px-3 py-1 rounded-full text-xs hover:border-ps-light transition-colors"
+                            className="bg-brand-card border border-gray-700 px-3 py-1 rounded-full text-xs hover:border-ps-light transition-colors active:scale-95"
                         >
                             {game}
                         </button>
@@ -225,8 +227,7 @@ const App: React.FC = () => {
 
             <div className="text-center pb-8">
                 <p className="text-[10px] text-gray-500">
-                    * Prices found via AI search. Exchange rates are approximate estimates. 
-                    Official store prices may vary by payment method.
+                    * Prices via AI search. Rates are estimates. 
                 </p>
             </div>
           </div>
