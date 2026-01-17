@@ -71,16 +71,19 @@ const App: React.FC = () => {
       console.error(err);
       let msg = "Something went wrong. Please try again.";
       
-      // Parse JSON error from Google if present
-      if (err.message && (err.message.includes('{') || err.message.includes('429'))) {
-          if (err.message.includes('429') || err.message.includes('Quota') || err.message.includes('Resource Exhausted')) {
-              msg = "Server is busy (High Traffic). Please wait 30 seconds and try again.";
-          } else {
-             msg = "Unable to fetch prices. Please check your connection or try a different game.";
-          }
-      } else if (err.message) {
-          msg = err.message;
+      const errorMessage = err.message || err.toString();
+
+      // Handle specific error types
+      if (errorMessage.includes('429') || errorMessage.includes('Quota') || errorMessage.includes('Resource Exhausted')) {
+          msg = "⚠️ API Quota Exceeded. Note: Quotas are per Google Cloud Project, not per Key. Please try again in a minute.";
+      } else if (errorMessage.includes('API Key is missing')) {
+          msg = "⚠️ API Key is missing. Please check your Netlify Site Settings > Environment Variables.";
+      } else if (errorMessage.includes('503')) {
+          msg = "⚠️ AI Service Overloaded. We are retrying, but it's very busy right now.";
+      } else if (errorMessage.includes('fetch')) {
+          msg = "⚠️ Network Error. Please check your internet connection.";
       }
+      
       setError(msg);
     } finally {
       setLoading(false);
