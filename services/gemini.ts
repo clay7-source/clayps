@@ -1,18 +1,30 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GameData, REGIONS } from "../types";
 
-const RAWG_API_KEY = process.env.RAWG_API_KEY || '';
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper for delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Helper to fetch metadata from RAWG
+// This function is designed to NEVER throw an error, ensuring it doesn't break the main app flow
 const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
-  if (!RAWG_API_KEY) return {};
+  // Access keys directly via process.env which is replaced by Vite at build time
+  const rawgKey = process.env.RAWG_API_KEY;
+
+  if (!rawgKey) {
+    console.log("RAWG_API_KEY not found, skipping rich metadata fetch.");
+    return {};
+  }
   
   try {
     const response = await fetch(
-      `https://api.rawg.io/api/games?key=${RAWG_API_KEY}&search=${encodeURIComponent(query)}&page_size=1`
+      `https://api.rawg.io/api/games?key=${rawgKey}&search=${encodeURIComponent(query)}&page_size=1`
     );
+    
+    if (!response.ok) {
+        // If RAWG is down or rate limited, just return empty, don't throw
+        return {};
+    }
+
     const data = await response.json();
 
     if (data.results && data.results.length > 0) {
@@ -23,19 +35,20 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
       };
     }
   } catch (error) {
-    console.warn("RAWG API Error:", error);
+    // Silently catch RAWG errors so we don't block the Gemini price check
+    console.warn("RAWG Metadata Fetch skipped:", error);
   }
   return {};
 };
 
-// Helper for delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
 // Helper to fetch prices and description from Gemini
 const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): Promise<GameData> => {
-    if (!process.env.API_KEY) throw new Error("API Key is missing");
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error("Google API Key is missing. Please set API_KEY in Netlify.");
 
+    const ai = new GoogleGenAI({ apiKey });
     const model = "gemini-3-flash-preview";
+    
     const activeRegions = REGIONS.filter(r => selectedRegionCodes.includes(r.code));
     
     const regionPromptList = activeRegions.map((r, i) => 
@@ -109,17 +122,18 @@ const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): 
 
       } catch (e: any) {
         lastError = e;
-        // Check for 429 (Quota) or 503 (Service Unavailable) or 500
+        // Check for 429 (Quota) or 503 (Service Unavailable)
         const isRateLimit = e.message?.includes('429') || e.status === 429 || e.toString().includes('429');
         const isServerBusy = e.message?.includes('503') || e.status === 503;
         
         if ((isRateLimit || isServerBusy) && i < maxRetries - 1) {
-           const waitTime = 2000 * Math.pow(2, i); // 2s, 4s
-           console.log(`Gemini API busy (429/503), retrying in ${waitTime}ms...`);
+           // Exponential backoff: 2s, 4s, 8s
+           const waitTime = 2000 * Math.pow(2, i); 
+           console.log(`Gemini API busy (Attempt ${i+1}/${maxRetries}), retrying in ${waitTime}ms...`);
            await delay(waitTime);
            continue;
         }
-        break; // Stop retrying if other error or max retries reached
+        break; 
       }
     }
     
@@ -132,17 +146,19 @@ export const searchGamePrices = async (gameName: string, selectedRegionCodes: st
     throw new Error("Please select at least one region.");
   }
 
-  // Run searches in parallel for "2 searches" behavior and speed
+  // Run searches in parallel
+  // We use Promise.all because we want to start both immediately.
+  // fetchRawgMetadata catches its own errors, so it will not cause Promise.all to reject.
   const [rawgData, geminiData] = await Promise.all([
     fetchRawgMetadata(gameName),
     fetchGeminiPrices(gameName, selectedRegionCodes)
   ]);
 
-  // Merge Data: RAWG title/image takes precedence if available
+  // Merge Data: RAWG title/image takes precedence if available and valid
   const finalData: GameData = {
     ...geminiData,
-    ...rawgData, // Overrides title and coverImageUrl
-    // Ensure we keep gemini description as it is optimized for short display
+    ...rawgData, 
+    // Always use the description from Gemini as it's generated for the context of this app
     description: geminiData.description 
   };
   
