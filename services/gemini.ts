@@ -5,25 +5,17 @@ import { GameData, REGIONS } from "../types";
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Helper to fetch metadata from RAWG
-// This function is designed to NEVER throw an error, ensuring it doesn't break the main app flow
 const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
-  // Access keys directly via process.env which is replaced by Vite at build time
-  const rawgKey = process.env.RAWG_API_KEY;
+  const rawgKey = process.env.RAWG_API_KEY ? process.env.RAWG_API_KEY.trim() : '';
 
-  if (!rawgKey) {
-    // Optional debug log
-    // console.log("RAWG_API_KEY not found, skipping rich metadata fetch.");
-    return {};
-  }
+  if (!rawgKey) return {};
   
   try {
     const response = await fetch(
       `https://api.rawg.io/api/games?key=${rawgKey}&search=${encodeURIComponent(query)}&page_size=1`
     );
     
-    if (!response.ok) {
-        return {};
-    }
+    if (!response.ok) return {};
 
     const data = await response.json();
 
@@ -42,10 +34,13 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
 
 // Helper to fetch prices and description from Gemini
 const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): Promise<GameData> => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("Google API Key is missing. Please set API_KEY in your Netlify Environment Variables.");
+    const rawKey = process.env.API_KEY;
+    const apiKey = rawKey ? rawKey.trim() : '';
+
+    if (!apiKey) throw new Error("Google API Key is missing. Please check your Netlify Environment Variables.");
 
     const ai = new GoogleGenAI({ apiKey });
+    // Using gemini-3-flash-preview as per standard instructions
     const model = "gemini-3-flash-preview";
     
     const activeRegions = REGIONS.filter(r => selectedRegionCodes.includes(r.code));
@@ -75,76 +70,51 @@ const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): 
       Return a strictly formatted JSON object.
     `;
 
-    // Increased Retry logic for 429 (Rate Limit) errors
-    // Free tier can be very congested. We will try 4 times with longer delays.
-    let lastError: any;
-    const maxRetries = 4;
-
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING, description: "Official game title" },
-                description: { type: Type.STRING, description: "Short description" },
-                coverImageUrl: { type: Type.STRING, description: "URL of the game cover art" },
-                prices: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      region: { type: Type.STRING, description: "Region name" },
-                      regionCode: { type: Type.STRING, enum: ["US", "SG", "TR", "ID"] },
-                      currency: { type: Type.STRING, description: "Currency code" },
-                      amount: { type: Type.NUMBER, description: "Current price" },
-                      originalAmount: { type: Type.NUMBER, description: "Original price" },
-                    },
-                    required: ["region", "regionCode", "currency", "amount"],
+    try {
+      // Direct call without loop. If we hit quota, we fail fast. 
+      // Retrying automatically on quota errors usually just extends the ban duration.
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING, description: "Official game title" },
+              description: { type: Type.STRING, description: "Short description" },
+              coverImageUrl: { type: Type.STRING, description: "URL of the game cover art" },
+              prices: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    region: { type: Type.STRING, description: "Region name" },
+                    regionCode: { type: Type.STRING, enum: ["US", "SG", "TR", "ID"] },
+                    currency: { type: Type.STRING, description: "Currency code" },
+                    amount: { type: Type.NUMBER, description: "Current price" },
+                    originalAmount: { type: Type.NUMBER, description: "Original price" },
                   },
+                  required: ["region", "regionCode", "currency", "amount"],
                 },
               },
-              required: ["title", "description", "prices"],
             },
+            required: ["title", "description", "prices"],
           },
-        });
+        },
+      });
 
-        const text = response.text;
-        if (!text) throw new Error("No response from AI");
-        
-        return JSON.parse(text) as GameData;
+      const text = response.text;
+      if (!text) throw new Error("AI returned empty response.");
+      
+      return JSON.parse(text) as GameData;
 
-      } catch (e: any) {
-        lastError = e;
-        
-        // Check specifically for 429 (Quota) or 503 (Service Unavailable)
-        const isRateLimit = e.message?.includes('429') || e.status === 429 || e.toString().includes('429') || e.toString().includes('Quota');
-        const isServerBusy = e.message?.includes('503') || e.status === 503;
-        
-        if ((isRateLimit || isServerBusy) && i < maxRetries - 1) {
-           // Exponential backoff: 3s, 6s, 12s, 24s
-           const waitTime = 3000 * Math.pow(2, i); 
-           console.warn(`Gemini API busy (Attempt ${i+1}/${maxRetries}), retrying in ${waitTime/1000}s...`);
-           await delay(waitTime);
-           continue;
-        }
-        
-        // If it's a 400 or 404, break immediately, retrying won't help
-        if (e.status === 400 || e.status === 404) {
-            console.error("Gemini Client Error:", e);
-            break;
-        }
-
-        break; 
-      }
+    } catch (e: any) {
+      // Log simple error
+      console.error("Gemini Request Failed:", e.message);
+      throw e; 
     }
-    
-    throw lastError;
 };
 
 // Main function combining both sources
@@ -159,7 +129,7 @@ export const searchGamePrices = async (gameName: string, selectedRegionCodes: st
     fetchGeminiPrices(gameName, selectedRegionCodes)
   ]);
 
-  // Merge Data: RAWG title/image takes precedence if available
+  // Merge Data
   const finalData: GameData = {
     ...geminiData,
     ...rawgData, 
