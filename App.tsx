@@ -67,7 +67,20 @@ const App: React.FC = () => {
         savePriceHistory(data.title, data.prices);
       }
     } catch (err: any) {
-      setError(err.message || "Something went wrong. Please try again.");
+      console.error(err);
+      let msg = "Something went wrong. Please try again.";
+      
+      // Parse JSON error from Google if present
+      if (err.message && (err.message.includes('{') || err.message.includes('429'))) {
+          if (err.message.includes('429') || err.message.includes('Quota')) {
+              msg = "Server is busy (Rate Limit Reached). Please wait a moment and try again.";
+          } else {
+             msg = "Unable to fetch prices. Please check your connection or try a different game.";
+          }
+      } else if (err.message) {
+          msg = err.message;
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
