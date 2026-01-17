@@ -11,7 +11,8 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
   const rawgKey = process.env.RAWG_API_KEY;
 
   if (!rawgKey) {
-    console.log("RAWG_API_KEY not found, skipping rich metadata fetch.");
+    // Optional debug log
+    // console.log("RAWG_API_KEY not found, skipping rich metadata fetch.");
     return {};
   }
   
@@ -21,7 +22,6 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
     );
     
     if (!response.ok) {
-        // If RAWG is down or rate limited, just return empty, don't throw
         return {};
     }
 
@@ -35,7 +35,6 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
       };
     }
   } catch (error) {
-    // Silently catch RAWG errors so we don't block the Gemini price check
     console.warn("RAWG Metadata Fetch skipped:", error);
   }
   return {};
@@ -44,7 +43,7 @@ const fetchRawgMetadata = async (query: string): Promise<Partial<GameData>> => {
 // Helper to fetch prices and description from Gemini
 const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): Promise<GameData> => {
     const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("Google API Key is missing. Please set API_KEY in Netlify.");
+    if (!apiKey) throw new Error("Google API Key is missing. Please set API_KEY in your Netlify Environment Variables.");
 
     const ai = new GoogleGenAI({ apiKey });
     const model = "gemini-3-flash-preview";
@@ -76,9 +75,10 @@ const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): 
       Return a strictly formatted JSON object.
     `;
 
-    // Retry logic for 429 (Rate Limit) errors
+    // Increased Retry logic for 429 (Rate Limit) errors
+    // Free tier can be very congested. We will try 4 times with longer delays.
     let lastError: any;
-    const maxRetries = 3;
+    const maxRetries = 4;
 
     for (let i = 0; i < maxRetries; i++) {
       try {
@@ -93,7 +93,6 @@ const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): 
               properties: {
                 title: { type: Type.STRING, description: "Official game title" },
                 description: { type: Type.STRING, description: "Short description" },
-                // Fallback cover if RAWG fails
                 coverImageUrl: { type: Type.STRING, description: "URL of the game cover art" },
                 prices: {
                   type: Type.ARRAY,
@@ -122,17 +121,25 @@ const fetchGeminiPrices = async (query: string, selectedRegionCodes: string[]): 
 
       } catch (e: any) {
         lastError = e;
-        // Check for 429 (Quota) or 503 (Service Unavailable)
-        const isRateLimit = e.message?.includes('429') || e.status === 429 || e.toString().includes('429');
+        
+        // Check specifically for 429 (Quota) or 503 (Service Unavailable)
+        const isRateLimit = e.message?.includes('429') || e.status === 429 || e.toString().includes('429') || e.toString().includes('Quota');
         const isServerBusy = e.message?.includes('503') || e.status === 503;
         
         if ((isRateLimit || isServerBusy) && i < maxRetries - 1) {
-           // Exponential backoff: 2s, 4s, 8s
-           const waitTime = 2000 * Math.pow(2, i); 
-           console.log(`Gemini API busy (Attempt ${i+1}/${maxRetries}), retrying in ${waitTime}ms...`);
+           // Exponential backoff: 3s, 6s, 12s, 24s
+           const waitTime = 3000 * Math.pow(2, i); 
+           console.warn(`Gemini API busy (Attempt ${i+1}/${maxRetries}), retrying in ${waitTime/1000}s...`);
            await delay(waitTime);
            continue;
         }
+        
+        // If it's a 400 or 404, break immediately, retrying won't help
+        if (e.status === 400 || e.status === 404) {
+            console.error("Gemini Client Error:", e);
+            break;
+        }
+
         break; 
       }
     }
@@ -147,18 +154,15 @@ export const searchGamePrices = async (gameName: string, selectedRegionCodes: st
   }
 
   // Run searches in parallel
-  // We use Promise.all because we want to start both immediately.
-  // fetchRawgMetadata catches its own errors, so it will not cause Promise.all to reject.
   const [rawgData, geminiData] = await Promise.all([
     fetchRawgMetadata(gameName),
     fetchGeminiPrices(gameName, selectedRegionCodes)
   ]);
 
-  // Merge Data: RAWG title/image takes precedence if available and valid
+  // Merge Data: RAWG title/image takes precedence if available
   const finalData: GameData = {
     ...geminiData,
     ...rawgData, 
-    // Always use the description from Gemini as it's generated for the context of this app
     description: geminiData.description 
   };
   
